@@ -3,7 +3,6 @@ import socket
 import argparse
 import os
 
-
 class Server(threading.Thread):
     def __init__(self, host, port):
         super().__init__()
@@ -19,29 +18,21 @@ class Server(threading.Thread):
         print("Listening at", sock.getsockname())
 
         while True:
-            # Accept new connection
             sc, sockname = sock.accept()
             print(f"Nouvelle connexion de {sc.getpeername()}")
 
-            # Create new thread
             server_socket = ServerSocket(sc, sockname, self)
-
-            # Start new thread
             server_socket.start()
-
-            # Add thread to active connections
             self.connections.append(server_socket)
-            print("En attente de message(s) de", sc.getpeername())
+            print("en attente de message(s) de", sc.getpeername())
 
     def broadcast(self, message, source):
         for connection in self.connections:
-            # Send to all connected clients except the source client
             if connection.sockname != source:
                 connection.send(message)
 
     def remove_connection(self, connection):
         self.connections.remove(connection)
-
 
 class ServerSocket(threading.Thread):
     def __init__(self, sc, sockname, server):
@@ -52,32 +43,29 @@ class ServerSocket(threading.Thread):
 
     def run(self):
         while True:
-            message = self.sc.recv(1024).decode("ascii")
+            message = self.sc.recv(1024).decode("utf-8")
             if message:
-                print(f"Message reçu de {self.sockname}: {message}")
+                print(f"Message recu de {self.sockname}: {message}")
                 self.server.broadcast(message, self.sockname)
             else:
-                # Client disconnected
-                print(f"Client {self.sockname} déconnecté")
+                print(f"Client {self.sockname} deconnecte")
                 self.sc.close()
                 self.server.remove_connection(self)
                 return
 
     def send(self, message):
-        self.sc.sendall(message.encode("ascii"))
+        self.sc.sendall(message.encode("utf-8"))
 
-
-def exit_server(server):
+def exit(server):
     while True:
         ipt = input("")
         if ipt == "stop":
-            print("Arrêt du serveur")
+            print("Arret du serveur")
             for connection in server.connections:
                 connection.sc.close()
 
             print("Fermeture du serveur")
             os._exit(0)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Chat Server")
@@ -89,5 +77,5 @@ if __name__ == '__main__':
     server = Server(args.host, args.p)
     server.start()
 
-    exit_thread = threading.Thread(target=exit_server, args=(server,))
+    exit_thread = threading.Thread(target=exit, args=(server,))
     exit_thread.start()
