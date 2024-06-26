@@ -1,17 +1,18 @@
+import sys
 import socket
 import threading
-import sys
-import os
-import tkinter as tk
-import argparse
 import sqlite3
 import hashlib
+from PyQt5 import QtCore, QtGui, QtWidgets
+import argparse
+from datetime import datetime
+
 
 def create_database():
     conn = sqlite3.connect('chat_clients.db')
     cursor = conn.cursor()
-    
-    # Créer une table pour les clients avec des champs supplémentaires
+
+    # Create a table for clients with additional fields
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,13 +23,12 @@ def create_database():
             dob DATE
         )
     ''')
-    
+
     conn.commit()
     conn.close()
 
 
-
-class Send(threading.Thread):
+class SendThread(QtCore.QThread):
     def __init__(self, sock, name):
         super().__init__()
         self.sock = sock
@@ -36,21 +36,21 @@ class Send(threading.Thread):
 
     def run(self):
         while True:
-            print('{}: '.format(self.name), end='')
-            sys.stdout.flush()
-            message = sys.stdin.readline().strip()
-
+            message = input(f'{self.name}: ')
             if message == 'QUIT':
-                self.sock.sendall('Server: {} a quitté(e) le chat.'.format(self.name).encode('utf-8'))
+                self.sock.sendall(f'Server: {self.name} a quitté(e) le chat.'.encode('ascii'))
                 break
             else:
-                self.sock.sendall('{}: {}'.format(self.name, message).encode('utf-8'))
-        
+                self.sock.sendall(f'{self.name}: {message}'.encode('ascii'))
+
         print('\nFermeture...')
         self.sock.close()
-        os._exit(0)
+        sys.exit()
 
-class Receive(threading.Thread):
+
+class ReceiveThread(QtCore.QThread):
+    message_received = QtCore.pyqtSignal(str)
+
     def __init__(self, sock, name):
         super().__init__()
         self.sock = sock
@@ -60,68 +60,201 @@ class Receive(threading.Thread):
         while True:
             message = self.sock.recv(1024).decode('ascii')
             if message:
-                print('\r{}\n{}: '.format(message, self.name), end='')
+                self.message_received.emit(message)
+                print(f'\r{message}\n{self.name}: ', end='')
             else:
                 print('\nLa connexion au serveur a été perdue\n')
                 print('Fermeture...')
                 self.sock.close()
-                os._exit(0)
+                sys.exit()
 
-import re
-from datetime import datetime
 
-class Client:
+class LoginDialog(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle('Login')
+        self.setModal(True)
+        self.resize(400, 300)  # Increase the default size
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        self.name_label = QtWidgets.QLabel('Nom:')
+        self.layout.addWidget(self.name_label)
+        self.name_input = QtWidgets.QLineEdit(self)
+        self.layout.addWidget(self.name_input)
+
+        self.password_label = QtWidgets.QLabel('Mot de passe:')
+        self.layout.addWidget(self.password_label)
+        self.password_input = QtWidgets.QLineEdit(self)
+        self.password_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.layout.addWidget(self.password_input)
+
+        self.button_layout = QtWidgets.QHBoxLayout()
+
+        self.login_button = QtWidgets.QPushButton('Login')
+        self.login_button.clicked.connect(self.accept)
+        self.button_layout.addWidget(self.login_button)
+
+        self.cancel_button = QtWidgets.QPushButton('Cancel')
+        self.cancel_button.clicked.connect(self.reject)
+        self.button_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(self.button_layout)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f6fff8;
+            }
+            QLabel {
+                font-size: 14pt;
+                color: black;
+            }
+            QLineEdit {
+                background-color: white;
+                padding: 10px;
+                font-size: 14pt;
+                border: 1px solid #000;
+                border-radius: 15px;
+                margin-bottom: 10px;
+            }
+            QPushButton {
+                background-color: #2ec4b6;
+                width: 100px;
+                height: 40px;
+                font-size: 14pt;
+                border-radius: 10px;
+                color: white;
+            }
+        """)
+
+    def get_credentials(self):
+        return self.name_input.text(), self.password_input.text()
+
+
+class Client(QtWidgets.QWidget):
     def __init__(self, host, port):
+        super().__init__()
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.name = None
-        self.password = None
-        self.messages = None
-        
+
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle('Chatroom')
+        self.resize(800, 600)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f6fff8;
+            }
+            QScrollArea {
+                background-color: #000;
+                border: 4px solid #000;
+                border-radius: 9px;
+            }
+            QLineEdit {
+                background-color: white;
+                padding: 10px;
+                font-size: 14pt;
+                border: 1px solid #000;
+                border-radius: 15px;
+            }
+            QPushButton {
+                background-color: #2ec4b6;
+                width: 50px;
+                height: 50px;
+                qproperty-iconSize: 30px 30px;
+                border-radius: 25px;
+            }
+        """)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        self.scroll_area = QtWidgets.QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+
+        self.messages_widget = QtWidgets.QWidget()
+        self.messages_layout = QtWidgets.QVBoxLayout(self.messages_widget)
+        self.messages_layout.addStretch(1)
+
+        self.scroll_area.setWidget(self.messages_widget)
+        self.layout.addWidget(self.scroll_area)
+
+        self.entry_layout = QtWidgets.QHBoxLayout()
+
+        self.text_input = QtWidgets.QLineEdit(self)
+        self.text_input.setPlaceholderText('Tapez votre message ici et appuyez sur Entrée pour envoyer')
+        self.text_input.returnPressed.connect(self.send_message)
+        self.entry_layout.addWidget(self.text_input)
+
+        self.send_button = QtWidgets.QPushButton(self)
+        self.send_button.setIcon(QtGui.QIcon('paper_plane.png'))
+        self.send_button.clicked.connect(self.send_message)
+        self.entry_layout.addWidget(self.send_button)
+
+        self.layout.addLayout(self.entry_layout)
+
+        self.setLayout(self.layout)
+
     def start(self):
-        print('Tentative de connexion au serveur {}:{}'.format(self.host, self.port))
+        login_dialog = LoginDialog()
+        if login_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            self.name, self.password = login_dialog.get_credentials()
+        else:
+            sys.exit()
+
+        print(f'Tentative de connexion au serveur {self.host}:{self.port}')
         self.sock.connect((self.host, self.port))
+        print(f'Connecté au serveur {self.host}:{self.port}')
 
-        print('Connecté au serveur {}:{}'.format(self.host, self.port))
-
-        self.name = input('Votre nom: ')
-        self.password = input('Votre mot de passe: ')
-
-        # Vérifier si l'utilisateur existe déjà
         user_exists, user_data = self.check_user_exists(self.name)
 
         if user_exists:
             hashed_password = user_data[2]
             if self.verify_password(self.password, hashed_password):
-                print('Connexion réussie, bienvenue {}!'.format(self.name))
+                print(f'Connexion réussie, bienvenue {self.name}!')
             else:
                 print('Mot de passe incorrect. Fermeture de la connexion...')
-                self.exit()
+                self.sock.close()
+                sys.exit()
         else:
             print('Nouvel utilisateur détecté. Veuillez fournir les informations supplémentaires.')
-            email = input('Adresse email: ')
-            gender = input('Genre: ')
-            dob = input('Date de naissance (DD-MM-YYYY): ')
+            email, gender, dob = self.prompt_additional_info()
+            if not email or not gender or not dob:
+                print('Inscription annulée. Fermeture de la connexion...')
+                self.sock.close()
+                sys.exit()
 
-            if not self.validate_dob(dob):
-                print('Date de naissance invalide. Fermeture de la connexion...')
-                self.exit()
-
-            # Hasher le mot de passe avant de l'enregistrer
             hashed_password = self.hash_password(self.password)
-
             self.register_client(self.name, hashed_password, email, gender, dob)
-            print('Inscription réussie, bienvenue {}!'.format(self.name))
+            print(f'Inscription réussie, bienvenue {self.name}!')
 
-        receive = Receive(self.sock, self.name)
-        receive.start()
+        self.send_thread = SendThread(self.sock, self.name)
+        self.receive_thread = ReceiveThread(self.sock, self.name)
+        self.receive_thread.message_received.connect(self.display_message)
 
-        self.sock.sendall('Server: {} a rejoint le chat. Bienvenue!'.format(self.name).encode('ascii'))
+        self.send_thread.start()
+        self.receive_thread.start()
 
-        print("\rTapez 'QUIT' pour quitter")
-        print('{}:' .format(self.name), end = '')
-        return receive
+        self.sock.sendall(f'Server: {self.name} a rejoint le chat. Bienvenue!'.encode('ascii'))
+        print("Tapez 'QUIT' pour quitter")
+
+    def prompt_additional_info(self):
+        email, ok = QtWidgets.QInputDialog.getText(self, 'Email', 'Adresse email:')
+        if not ok:
+            return None, None, None
+
+        gender, ok = QtWidgets.QInputDialog.getText(self, 'Genre', 'Genre:')
+        if not ok:
+            return None, None, None
+
+        dob, ok = QtWidgets.QInputDialog.getText(self, 'Date de naissance', 'Date de naissance (DD-MM-YYYY):')
+        if not ok or not self.validate_dob(dob):
+            return None, None, None
+
+        return email, gender, dob
 
     def check_user_exists(self, name):
         conn = sqlite3.connect('chat_clients.db')
@@ -140,20 +273,17 @@ class Client:
         conn = sqlite3.connect('chat_clients.db')
         cursor = conn.cursor()
 
-        cursor.execute('INSERT INTO clients (name, password, email, gender, dob) VALUES (?, ?, ?, ?, ?)', 
-                    (name, password, email, gender, dob))
-        
+        cursor.execute('INSERT INTO clients (name, password, email, gender, dob) VALUES (?, ?, ?, ?, ?)',
+                       (name, password, email, gender, dob))
+
         conn.commit()
         conn.close()
 
     def hash_password(self, password):
-        # Utilisation de SHA-256 pour le hachage du mot de passe
         return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
     def verify_password(self, password, hashed_password):
-        # Vérifier si le mot de passe saisi correspond au hachage stocké
         return hashed_password == self.hash_password(password)
-
 
     def validate_dob(self, dob):
         try:
@@ -165,91 +295,75 @@ class Client:
         except ValueError:
             return False
 
-    def send(self, textInput):
-        messages = textInput.get()
-        textInput.delete(0, tk.END)
-        self.messages.insert(tk.END, '{}: {}'.format(self.name, messages))
-
-        # Type 'QUIT' to leave the chatroom
-        if messages == 'QUIT':
-            self.sock.sendall('Server: {} a quitté(e) le chat.'.format(self.name).encode('utf-8'))
+    def send_message(self):
+        message = self.text_input.text()
+        self.text_input.clear()
+        self.display_message(f'{self.name}: {message}', 'sent')
+        if message == 'QUIT':
+            self.sock.sendall(f'Server: {self.name} a quitté(e) le chat.'.encode('ascii'))
             print('\nFermeture...')
             self.sock.close()
-            os._exit(0)
-    
+            sys.exit()
         else:
-            self.sock.sendall('{}: {}'.format(self.name, messages).encode('ascii'))
-    
-    
-    def exit(self, textInput):
-        messages = textInput.get()
-        textInput.delete(0, tk.END)
-        self, messages.insert(tk.END, '{}:{}' .format(self.name, messages))
+            self.sock.sendall(f'{self.name}: {message}'.encode('ascii'))
 
-        # Type 'QUIT' to leave the chatroom
-        if messages == 'QUIT':
-            self.sock.sendall('Server: {} a quitté(e) le chat.'.format(self.name).encode('ascii'))
+    def display_message(self, message, message_type='received'):
+        name = message.split(': ')[0]
+        content = ': '.join(message.split(': ')[1:])
 
-            print('\nFermeture...')
-            self.sock.close()
-            os._exit(0)
+        name_label = QtWidgets.QLabel(name)
+        name_label.setStyleSheet("""
+            QLabel {
+                color: black;
+                font-weight: bold;
+                text-shadow: 1px 1px #87CEEB, -1px -1px #87CEEB, 1px -1px #87CEEB, -1px 1px #87CEEB;
+            }
+        """)
 
-        # Send messages to server for broadcasting
+        message_label = QtWidgets.QLabel(content)
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet(f"""
+            QLabel {{
+                border: 2px solid #000;
+                font-size: 14pt;
+                border-radius: 15px;
+                padding: 10px;
+                background-color: {"#2ec4b6" if message_type == 'sent' else "#cbf3f0"};
+                color: {"white" if message_type == 'sent' else "black"};
+            }}
+        """)
+
+        message_widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(message_widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        if message_type == 'sent':
+            name_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
+            layout.addWidget(name_label)
+            layout.addWidget(message_label, alignment=QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
         else:
-            self.sock.sendall('{}: {}'.format(self.name, messages).encode('ascii'))
+            layout.addWidget(name_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+            layout.addWidget(message_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
 
-def main(host, port):
-    #initialize and run GUI application
+        self.messages_layout.addWidget(message_widget)
+        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
 
-    client = Client(host, port)
-    receive = client.start()
 
-    window = tk.Tk()
-    window.title('Chatroom')
+def main():
+    create_database()
 
-    fromMessages = tk.Frame(master=window)
-    scrollbar = tk.Scrollbar(master=fromMessages)
-    messages = tk.Listbox(master=fromMessages, yscrollcommand=scrollbar.set)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y, expand=False)
-    messages.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    client.messages = messages
-    receive.messages = messages
+    parser = argparse.ArgumentParser(description='Chat Client')
+    parser.add_argument('host', help='Adresse IP du serveur')
+    parser.add_argument('port', type=int, help='Port du serveur')
 
-    fromMessages.grid(row=0, column=0, columnspan=2, sticky='nsew')
-    fromEntry = tk.Frame(master=window)
-    textInput = tk.Entry(master=fromEntry)
+    args = parser.parse_args()
 
-    textInput.pack(fill=tk.BOTH, expand=True)
-    textInput.bind('<Return>', lambda x: client.send(textInput))
-    textInput.insert(0, 'Tapez votre message ici et appuyez sur Entrée pour envoyer')
+    app = QtWidgets.QApplication(sys.argv)
+    client = Client(args.host, args.port)
+    client.show()
+    client.start()
+    sys.exit(app.exec_())
 
-    def clear_text_input(event):
-        textInput.delete(0, tk.END)
-
-    textInput.bind('<FocusIn>', clear_text_input)
-
-    btnSend = tk.Button(
-        master=window,
-        text='Envoyer',
-        command=lambda: client.send(textInput)
-    )
-
-    fromEntry.grid(row=1, column=0, padx=10, sticky='ew')
-    btnSend.grid(row=1, column=1, pady=10, sticky='ew')
-
-    window.rowconfigure(0, minsize=500 ,weight=1)
-    window.rowconfigure(1, minsize=50, weight=0)
-    window.columnconfigure(0, minsize=500, weight=1)
-    window.columnconfigure(1, minsize=200, weight=0)
-
-    window.mainloop()
 
 if __name__ == '__main__':
-    create_database()
-    parser = argparse.ArgumentParser(description="Chat Server")
-    parser.add_argument("host", help="localhost")
-    parser.add_argument("-p", metavar="PORT", type=int, help="TCP port(default 1060)", default=1060)
-    args = parser.parse_args()
-    main(args.host, args.p)
-
-
+    main()
