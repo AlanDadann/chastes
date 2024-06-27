@@ -24,7 +24,7 @@ class Server(threading.Thread):
             server_socket = ServerSocket(sc, sockname, self)
             server_socket.start()
             self.connections.append(server_socket)
-            print("en attente de message(s) de", sc.getpeername())
+            print("En attente de message(s) de", sc.getpeername())
 
     def broadcast(self, message, source):
         for connection in self.connections:
@@ -41,10 +41,14 @@ class ServerSocket(threading.Thread):
         self.sockname = sockname
         self.server = server
 
+
     def run(self):
         while True:
             message = self.sc.recv(1024).decode("utf-8")
-            if message:
+            if message.startswith("/file "):
+                filename = message.split(' ', 1)[1]
+                self.receive_file(filename)
+            elif message:
                 print(f"Message recu de {self.sockname}: {message}")
                 self.server.broadcast(message, self.sockname)
             else:
@@ -53,8 +57,28 @@ class ServerSocket(threading.Thread):
                 self.server.remove_connection(self)
                 return
 
+    def receive_file(self, filename):
+        with open(f"received_{filename}", "wb") as f:
+            while True:
+                data = self.sc.recv(1024)
+                if not data:
+                    break
+                f.write(data)
+        print(f"Fichier {filename} recu de {self.sockname}")
+        self.server.broadcast(f"Fichier {filename} recu de {self.sockname}", self.sockname)
+
     def send(self, message):
         self.sc.sendall(message.encode("utf-8"))
+
+    def receive_file(self, filename):
+        with open(f"received_{filename}", "wb") as f:
+            while True:
+                data = self.sc.recv(1024)
+                if not data:
+                    break
+                f.write(data)
+        print(f"Fichier {filename} recu de {self.sockname}")
+        self.server.broadcast(f"Fichier {filename} recu de {self.sockname}", self.sockname)
 
 def exit(server):
     while True:
