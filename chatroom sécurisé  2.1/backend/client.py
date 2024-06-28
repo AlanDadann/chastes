@@ -6,6 +6,11 @@ import hashlib
 from PyQt5 import QtCore, QtGui, QtWidgets
 import argparse
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
+import random
+import os
+import mimetypes  # Ajout de l'importation de mimetypes
+
 
 
 def create_database():
@@ -37,7 +42,14 @@ class SendThread(QtCore.QThread):
     def run(self):
         while True:
             message = input(f'{self.name}: ')
-            if message == 'QUIT':
+            if message.startswith('/private '):
+                parts = message.split(' ', 2)
+                if len(parts) < 3:
+                    print("Commande incorrecte. Utilisez /private <username> <message>")
+                    continue
+                target_user, private_message = parts[1], parts[2]
+                self.sock.sendall(f'/private {target_user} {self.name}: {private_message}'.encode('ascii'))
+            elif message == 'QUIT':
                 self.sock.sendall(f'Server: {self.name} a quitté(e) le chat.'.encode('ascii'))
                 break
             else:
@@ -49,7 +61,7 @@ class SendThread(QtCore.QThread):
 
 
 class ReceiveThread(QtCore.QThread):
-    message_received = QtCore.pyqtSignal(str)
+    message_received = QtCore.pyqtSignal(str, str)
 
     def __init__(self, sock, name):
         super().__init__()
@@ -60,8 +72,17 @@ class ReceiveThread(QtCore.QThread):
         while True:
             message = self.sock.recv(1024).decode('ascii')
             if message:
-                self.message_received.emit(message)
-                print(f'\r{message}\n{self.name}: ', end='')
+                if message.startswith('/private'):
+                    parts = message.split(' ', 3)
+                    if len(parts) < 4:
+                        continue
+                    target_user, sender, private_message = parts[1], parts[2], parts[3]
+                    if target_user == self.name:
+                        self.message_received.emit(f'Private from {sender}: {private_message}', 'private')
+                        print(f'\rPrivate from {sender}: {private_message}\n{self.name}: ', end='')
+                else:
+                    self.message_received.emit(message, 'public')
+                    print(f'\r{message}\n{self.name}: ', end='')
             else:
                 print('\nLa connexion au serveur a été perdue\n')
                 print('Fermeture...')
@@ -75,7 +96,7 @@ class LoginDialog(QtWidgets.QDialog):
 
         self.setWindowTitle('Login')
         self.setModal(True)
-        self.resize(400, 300)  # Increase the default size
+        self.resize(400, 400)  # Increase the default size to accommodate the captcha
 
         self.layout = QtWidgets.QVBoxLayout(self)
 
@@ -89,6 +110,16 @@ class LoginDialog(QtWidgets.QDialog):
         self.password_input = QtWidgets.QLineEdit(self)
         self.password_input.setEchoMode(QtWidgets.QLineEdit.Password)
         self.layout.addWidget(self.password_input)
+
+        self.captcha_label = QtWidgets.QLabel('Captcha:')
+        self.layout.addWidget(self.captcha_label)
+
+        self.captcha_image_label = QtWidgets.QLabel(self)
+        self.layout.addWidget(self.captcha_image_label)
+
+        self.captcha_input = QtWidgets.QLineEdit(self)
+        self.captcha_input.setPlaceholderText('Enter the captcha text')
+        self.layout.addWidget(self.captcha_input)
 
         self.button_layout = QtWidgets.QHBoxLayout()
 
@@ -128,8 +159,53 @@ class LoginDialog(QtWidgets.QDialog):
             }
         """)
 
+        self.generate_captcha()
+
     def get_credentials(self):
-        return self.name_input.text(), self.password_input.text()
+        return self.name_input.text(), self.password_input.text(), self.captcha_input.text()
+
+    def generate_captcha(self):
+        captcha_text = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=6))
+        self.captcha_text = captcha_text
+
+        # Create an image with white background
+        image = Image.new('RGB', (200, 60), 'white')
+        draw = ImageDraw.Draw(image)
+
+        try:
+            font = ImageFont.truetype('arial.ttf', 36)
+        except IOError:
+            font = ImageFont.load_default()
+
+        draw.text((10, 10), captcha_text, font=font, fill='black')
+
+        # Save the image to a temporary file
+        image.save('captcha.jpg')
+
+        # Set the QPixmap from the saved image
+        self.captcha_image_label.setPixmap(QtGui.QPixmap('captcha.jpg'))
+
+    def validate_captcha(self, input_text):
+        return input_text == self.captcha_text
+
+
+class FileSendThread(QtCore.QThread):
+    def __init__(self, sock, file_path):
+        super().__init__()
+        self.sock = sock
+        self.file_path = file_path
+
+    def run(self):
+        try:
+            with open(self.file_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024)
+                    if not chunk:
+                        break
+                    self.sock.sendall(chunk)
+            print(f"Fichier envoyé avec succès: {self.file_path}")
+        except Exception as e:
+            print(f"Erreur lors de l'envoi du fichier {self.file_path}: {str(e)}")
 
 
 class Client(QtWidgets.QWidget):
@@ -152,7 +228,6 @@ class Client(QtWidgets.QWidget):
             QScrollArea {
                 background-color: #000;
                 border: 4px solid #000;
-                border-radius: 9px;
             }
             QLineEdit {
                 background-color: white;
@@ -189,6 +264,11 @@ class Client(QtWidgets.QWidget):
         self.text_input.returnPressed.connect(self.send_message)
         self.entry_layout.addWidget(self.text_input)
 
+        self.file_button = QtWidgets.QPushButton(self)
+        self.file_button.setIcon(QtGui.QIcon('piece.webp'))  # Set the icon for the button
+        self.file_button.clicked.connect(self.select_file)
+        self.entry_layout.addWidget(self.file_button)
+
         self.send_button = QtWidgets.QPushButton(self)
         self.send_button.setIcon(QtGui.QIcon('paper_plane.png'))
         self.send_button.clicked.connect(self.send_message)
@@ -198,10 +278,66 @@ class Client(QtWidgets.QWidget):
 
         self.setLayout(self.layout)
 
+    def select_file(self):
+        options = QtWidgets.QFileDialog.Options()
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select File to Send", "", "All Files (*)",
+                                                             options=options)
+        if file_path:
+            self.send_file(file_path)
+
+    def send_file(self, file_path):
+        try:
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+                self.sock.sendall(file_content)
+                print(f"Fichier envoyé avec succès: {os.path.basename(file_path)}")
+                self.display_file(file_content, os.path.basename(file_path))
+        except Exception as e:
+            print(f"Erreur lors de l'envoi du fichier {os.path.basename(file_path)} : {str(e)}")
+
+    def display_file(self, file_content, filename):
+        # Determine the MIME type of the file
+        mime_type, _ = mimetypes.guess_type(filename)
+
+        # Display file as a message
+        file_label = QtWidgets.QLabel()
+        file_label.setWordWrap(True)
+        file_label.setStyleSheet("""
+            QLabel {
+                border: 2px solid #000;
+                font-size: 12pt;
+                border-radius: 15px;
+                padding: 10px;
+                background-color: #cbf3f0;
+                color: black;
+                max-width: 60%;  /* Adjust width as needed */
+            }
+        """)
+        if mime_type and mime_type.startswith('image'):
+            # If it's an image, display it as an image
+            pixmap = QtGui.QPixmap()
+            pixmap.loadFromData(file_content)
+            file_label.setPixmap(pixmap.scaledToWidth(300))  # Adjust width as needed
+        else:
+            # Otherwise, display a generic file icon with the filename
+            file_label.setText(f"File sent: {filename}")
+
+        # Align file message to the right
+        file_widget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(file_widget)
+        spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        layout.addItem(spacer)
+        layout.addWidget(file_label)
+        self.messages_layout.addWidget(file_widget)
+        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
+
     def start(self):
         login_dialog = LoginDialog()
         if login_dialog.exec_() == QtWidgets.QDialog.Accepted:
-            self.name, self.password = login_dialog.get_credentials()
+            self.name, self.password, captcha_input = login_dialog.get_credentials()
+            if not login_dialog.validate_captcha(captcha_input):
+                print('Captcha incorrect. Fermeture de la connexion...')
+                sys.exit()
         else:
             sys.exit()
 
@@ -241,6 +377,7 @@ class Client(QtWidgets.QWidget):
         self.sock.sendall(f'Server: {self.name} a rejoint le chat. Bienvenue!'.encode('ascii'))
         print("Tapez 'QUIT' pour quitter")
 
+
     def prompt_additional_info(self):
         email, ok = QtWidgets.QInputDialog.getText(self, 'Email', 'Adresse email:')
         if not ok:
@@ -274,7 +411,7 @@ class Client(QtWidgets.QWidget):
         cursor = conn.cursor()
 
         cursor.execute('INSERT INTO clients (name, password, email, gender, dob) VALUES (?, ?, ?, ?, ?)',
-                    (name, password, email, gender, dob))
+                       (name, password, email, gender, dob))
 
         conn.commit()
         conn.close()
@@ -299,7 +436,14 @@ class Client(QtWidgets.QWidget):
         message = self.text_input.text()
         self.text_input.clear()
         self.display_message(f'{self.name}: {message}', 'sent')
-        if message == 'QUIT':
+        if message.startswith('/private '):
+            parts = message.split(' ', 2)
+            if len(parts) < 3:
+                self.display_message("Commande incorrecte. Utilisez /private <username> <message>", 'system')
+                return
+            target_user, private_message = parts[1], parts[2]
+            self.sock.sendall(f'/private {target_user} {self.name}: {private_message}'.encode('ascii'))
+        elif message == 'QUIT':
             self.sock.sendall(f'Server: {self.name} a quitté(e) le chat.'.encode('ascii'))
             print('\nFermeture...')
             self.sock.close()
@@ -341,6 +485,10 @@ class Client(QtWidgets.QWidget):
             name_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
             layout.addWidget(name_label)
             layout.addWidget(message_label, alignment=QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
+        elif message_type == 'private':
+            name_label.setText(f'Private from {name}')
+            layout.addWidget(name_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+            layout.addWidget(message_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         else:
             layout.addWidget(name_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
             layout.addWidget(message_label, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
@@ -367,4 +515,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
