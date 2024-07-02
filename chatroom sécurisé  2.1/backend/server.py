@@ -26,10 +26,10 @@ class Server(threading.Thread):
             self.connections.append(server_socket)
             print("En attente de message(s) de", sc.getpeername())
 
-    def broadcast(self, message, source):
+    def broadcast(self, message, source, is_file=False, filename=None, file_content=None):
         for connection in self.connections:
             if connection.sockname != source:
-                connection.send(message)
+                connection.send(message, is_file, filename, file_content)
 
     def remove_connection(self, connection):
         self.connections.remove(connection)
@@ -41,44 +41,43 @@ class ServerSocket(threading.Thread):
         self.sockname = sockname
         self.server = server
 
-
     def run(self):
         while True:
-            message = self.sc.recv(1024).decode("utf-8")
-            if message.startswith("/file "):
-                filename = message.split(' ', 1)[1]
-                self.receive_file(filename)
-            elif message:
-                print(f"Message recu de {self.sockname}: {message}")
-                self.server.broadcast(message, self.sockname)
+            header = self.sc.recv(1024).decode("utf-8")
+            if header.startswith("/file "):
+                parts = header.split(' ', 3)
+                if len(parts) < 4:
+                    continue
+                filename, file_size = parts[1], int(parts[2])
+                file_content = self.receive_file(file_size)
+                self.server.broadcast(f"/file {filename} {file_size}", self.sockname, is_file=True, filename=filename, file_content=file_content)
+            elif header:
+                print(f"Message recu de {self.sockname}: {header}")
+                self.server.broadcast(header, self.sockname)
             else:
                 print(f"Client {self.sockname} deconnecte")
                 self.sc.close()
                 self.server.remove_connection(self)
                 return
 
-    def receive_file(self, filename):
-        with open(f"received_{filename}", "wb") as f:
-            while True:
-                data = self.sc.recv(1024)
-                if not data:
-                    break
-                f.write(data)
-        print(f"Fichier {filename} recu de {self.sockname}")
-        self.server.broadcast(f"Fichier {filename} recu de {self.sockname}", self.sockname)
+    def receive_file(self, file_size):
+        file_content = b''
+        remaining = file_size
+        while remaining > 0:
+            chunk_size = 1024 if remaining >= 1024 else remaining
+            data = self.sc.recv(chunk_size)
+            if not data:
+                break
+            file_content += data
+            remaining -= len(data)
+        return file_content
 
-    def send(self, message):
-        self.sc.sendall(message.encode("utf-8"))
-
-    def receive_file(self, filename):
-        with open(f"received_{filename}", "wb") as f:
-            while True:
-                data = self.sc.recv(1024)
-                if not data:
-                    break
-                f.write(data)
-        print(f"Fichier {filename} recu de {self.sockname}")
-        self.server.broadcast(f"Fichier {filename} recu de {self.sockname}", self.sockname)
+    def send(self, message, is_file=False, filename=None, file_content=None):
+        if is_file:
+            self.sc.sendall(message.encode("utf-8"))
+            self.sc.sendall(file_content)
+        else:
+            self.sc.sendall(message.encode("utf-8"))
 
 def exit(server):
     while True:
