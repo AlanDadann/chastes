@@ -660,12 +660,50 @@ class TermsDialog(QtWidgets.QDialog):
         self.terms_text.setReadOnly(True)
         self.terms_text.setText(
             "Conditions d'utilisation:\n\n"
-            "1. Respectez les autres utilisateurs.\n"
-            "2. Ne partagez pas d'informations personnelles.\n"
-            "3. Pas de spam ou de publicité.\n"
-            "4. Utilisez un langage approprié.\n"
-            "5. Suivez les directives de la communauté.\n\n"
-            "En cliquant sur 'Accepter', vous acceptez ces conditions."
+            """
+            ## Charte de Conditions d'Utilisation
+
+            ### 1. Introduction
+            Bienvenue sur CaveoChat. En utilisant cette application, vous acceptez de respecter et d'être lié par les présentes conditions d'utilisation. Si vous n'acceptez pas ces conditions, veuillez ne pas utiliser notre application.
+
+            ### 2. Objectif de l'Application
+            CaveoChat est une plateforme de discussion en ligne destinée à faciliter la communication entre les utilisateurs dans un environnement sécurisé et respectueux.
+
+            ### 3. Inscription et Compte Utilisateur
+            - **Véracité des Informations** : Les utilisateurs doivent fournir des informations exactes lors de l'inscription.
+            - **Sécurité du Compte** : Les utilisateurs sont responsables de la sécurité de leur compte et doivent immédiatement signaler toute utilisation non autorisée.
+
+            ### 4. Comportement des Utilisateurs
+            - **Respect et Courtoisie** : Les utilisateurs doivent traiter les autres avec respect et courtoisie.
+            - **Contenu Inapproprié** : Il est interdit de publier des contenus haineux, diffamatoires, obscènes, offensants, violents ou illégaux.
+            - **Harcèlement** : Le harcèlement sous toutes ses formes est strictement interdit.
+            - **Protection de la Vie Privée** : Les utilisateurs ne doivent pas partager d'informations personnelles sans consentement.
+
+            ### 5. Utilisation Acceptable
+            - **Respect des Lois** : Les utilisateurs doivent se conformer à toutes les lois et régulations applicables.
+            - **Spam et Publicité** : La publication de spam ou de contenu publicitaire non autorisé est interdite.
+
+            ### 6. Contenu Utilisateur
+            - **Propriété du Contenu** : Les utilisateurs conservent la propriété de leur contenu mais accordent à CaveoChat une licence pour utiliser ce contenu.
+            - **Suppression de Contenu** : CaveoChat se réserve le droit de supprimer tout contenu qui viole ces conditions d'utilisation.
+
+            ### 7. Sécurité et Confidentialité
+            - **Protection des Données** : Nous nous engageons à protéger les données personnelles des utilisateurs conformément à notre politique de confidentialité.
+            - **Signalement** : Les utilisateurs peuvent signaler tout comportement ou contenu inapproprié via les outils de signalement de l'application.
+
+            ### 8. Modifications des Conditions d'Utilisation
+            CaveoChat se réserve le droit de modifier ces conditions d'utilisation à tout moment. Les utilisateurs seront informés de toute modification majeure.
+
+            ### 9. Responsabilité
+            - **Limitation de Responsabilité** : CaveoChat n'est pas responsable des actions des utilisateurs ou de tout contenu publié par les utilisateurs.
+            - **Indemnisation** : Les utilisateurs acceptent d'indemniser CaveoChat pour toute réclamation résultant de leur violation des présentes conditions d'utilisation.
+
+            ### 10. Résiliation
+            CaveoChat se réserve le droit de suspendre ou de résilier l'accès de tout utilisateur qui viole ces conditions d'utilisation.
+
+            ### 11. Contact
+            Pour toute question ou préoccupation concernant ces conditions d'utilisation, veuillez contacter notre support à [email de contact].
+            """
         )
         self.layout.addWidget(self.terms_text)
 
@@ -715,7 +753,9 @@ class TermsDialog(QtWidgets.QDialog):
         if self.checkbox.isChecked():
             super().accept()
         else:
-            QtWidgets.QMessageBox.warning(self, 'Attention', 'Vous devez accepter les conditions d\'utilisation pour continuer.')
+            QtWidgets.QMessageBox.warning(self, 'Attention',
+                                          'Vous devez accepter les conditions d\'utilisation pour continuer.')
+
 
 
 class NumClientsDialog(QtWidgets.QDialog):
