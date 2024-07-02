@@ -12,12 +12,11 @@ import os
 import mimetypes  # Ajout de l'importation de mimetypes
 
 
-
 def create_database():
     conn = sqlite3.connect('chat_clients.db')
     cursor = conn.cursor()
 
-    # Create a table for clients with additional fields
+    # Create a table for clients
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,8 +28,93 @@ def create_database():
         )
     ''')
 
+    # Create a table for matricules
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS matricules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            matricule TEXT NOT NULL
+        )
+    ''')
+
+    # Insert some sample matricules
+    sample_matricules = [
+        ('MAT12345',),
+        ('MAT67890',),
+        ('MAT11121',)
+    ]
+
+    cursor.executemany('INSERT INTO matricules (matricule) VALUES (?)', sample_matricules)
+
     conn.commit()
     conn.close()
+
+
+class MatriculeDialog(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle('Matricule')
+        self.setModal(True)
+        self.resize(400, 200)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        self.matricule_label = QtWidgets.QLabel('Entrez votre matricule:')
+        self.layout.addWidget(self.matricule_label)
+        self.matricule_input = QtWidgets.QLineEdit(self)
+        self.layout.addWidget(self.matricule_input)
+
+        self.button_layout = QtWidgets.QHBoxLayout()
+
+        self.ok_button = QtWidgets.QPushButton('OK')
+        self.ok_button.clicked.connect(self.accept)
+        self.button_layout.addWidget(self.ok_button)
+
+        self.cancel_button = QtWidgets.QPushButton('Cancel')
+        self.cancel_button.clicked.connect(self.reject)
+        self.button_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(self.button_layout)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f6fff8;
+            }
+            QLabel {
+                font-size: 14pt;
+                color: black;
+            }
+            QLineEdit {
+                background-color: white;
+                padding: 10px;
+                font-size: 14pt;
+                border: 1px solid #000;
+                border-radius: 15px;
+                margin-bottom: 10px;
+            }
+            QPushButton {
+                background-color: #2ec4b6;
+                width: 100px;
+                height: 40px;
+                font-size: 14pt;
+                border-radius: 10px;
+                color: white;
+            }
+        """)
+
+    def get_matricule(self):
+        return self.matricule_input.text()
+
+
+def check_matricule_exists(matricule):
+    conn = sqlite3.connect('chat_clients.db')
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM matricules WHERE matricule = ?', (matricule,))
+    matricule_data = cursor.fetchone()
+    conn.close()
+
+    return matricule_data is not None
 
 
 class SendThread(QtCore.QThread):
@@ -49,6 +133,21 @@ class SendThread(QtCore.QThread):
                     continue
                 target_user, private_message = parts[1], parts[2]
                 self.sock.sendall(f'/private {target_user} {self.name}: {private_message}'.encode('ascii'))
+            elif message.startswith('/sendfile '):
+                parts = message.split(' ', 2)
+                if len(parts) < 3:
+                    print("Commande incorrecte. Utilisez /sendfile <username> <filepath>")
+                    continue
+                target_user, file_path = parts[1], parts[2]
+                try:
+                    with open(file_path, "rb") as f:
+                        file_data = f.read()
+                        file_name = os.path.basename(file_path)
+                        self.sock.sendall(f'/sendfile {target_user} {self.name} {file_name} {len(file_data)}'.encode('ascii'))
+                        self.sock.sendall(file_data)
+                        print(f'Fichier envoyé à {target_user}: {file_name}')
+                except Exception as e:
+                    print(f"Erreur lors de l'envoi du fichier: {str(e)}")
             elif message == 'QUIT':
                 self.sock.sendall(f'Server: {self.name} a quitté(e) le chat.'.encode('ascii'))
                 break
@@ -62,6 +161,7 @@ class SendThread(QtCore.QThread):
 
 class ReceiveThread(QtCore.QThread):
     message_received = QtCore.pyqtSignal(str, str)
+    file_received = QtCore.pyqtSignal(bytes, str, str)
 
     def __init__(self, sock, name):
         super().__init__()
@@ -70,24 +170,37 @@ class ReceiveThread(QtCore.QThread):
 
     def run(self):
         while True:
-            message = self.sock.recv(1024).decode('ascii')
-            if message:
-                if message.startswith('/private'):
-                    parts = message.split(' ', 3)
-                    if len(parts) < 4:
-                        continue
-                    target_user, sender, private_message = parts[1], parts[2], parts[3]
-                    if target_user == self.name:
-                        self.message_received.emit(f'Private from {sender}: {private_message}', 'private')
-                        print(f'\rPrivate from {sender}: {private_message}\n{self.name}: ', end='')
-                else:
-                    self.message_received.emit(message, 'public')
-                    print(f'\r{message}\n{self.name}: ', end='')
+            header = self.sock.recv(1024).decode('ascii')
+            if header.startswith('/sendfile'):
+                parts = header.split(' ', 5)
+                if len(parts) < 6:
+                    continue
+                target_user, sender, file_name, file_size = parts[1], parts[2], parts[3], int(parts[4])
+                if target_user == self.name:
+                    file_data = b''
+                    while len(file_data) < file_size:
+                        file_data += self.sock.recv(1024)
+                    self.file_received.emit(file_data, file_name, sender)
+                    print(f'\rFichier reçu de {sender}: {file_name}\n{self.name}: ', end='')
             else:
-                print('\nLa connexion au serveur a été perdue\n')
-                print('Fermeture...')
-                self.sock.close()
-                sys.exit()
+                message = header
+                if message:
+                    if message.startswith('/private'):
+                        parts = message.split(' ', 3)
+                        if len(parts) < 4:
+                            continue
+                        target_user, sender, private_message = parts[1], parts[2], parts[3]
+                        if target_user == self.name:
+                            self.message_received.emit(f'Private from {sender}: {private_message}', 'private')
+                            print(f'\rPrivate from {sender}: {private_message}\n{self.name}: ', end='')
+                    else:
+                        self.message_received.emit(message, 'public')
+                        print(f'\r{message}\n{self.name}: ', end='')
+                else:
+                    print('\nLa connexion au serveur a été perdue\n')
+                    print('Fermeture...')
+                    self.sock.close()
+                    sys.exit()
 
 
 class LoginDialog(QtWidgets.QDialog):
@@ -165,19 +278,32 @@ class LoginDialog(QtWidgets.QDialog):
         return self.name_input.text(), self.password_input.text(), self.captcha_input.text()
 
     def generate_captcha(self):
-        captcha_text = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=6))
+        captcha_text = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=5))  # Increase length to 8
         self.captcha_text = captcha_text
 
         # Create an image with white background
-        image = Image.new('RGB', (200, 60), 'white')
+        image = Image.new('RGB', (200, 60), (255, 255, 255))
         draw = ImageDraw.Draw(image)
 
         try:
-            font = ImageFont.truetype('arial.ttf', 36)
+            font = ImageFont.truetype('arial.ttf', random.randint(28, 32))  # Randomize font size
         except IOError:
             font = ImageFont.load_default()
 
-        draw.text((10, 10), captcha_text, font=font, fill='black')
+        # Randomize RGB color for text
+        text_color = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
+
+        # Draw text with slight random distortions
+        for char_index, char in enumerate(captcha_text):
+            char_position = (10 + char_index * 20 + random.randint(-5, 5), random.randint(5, 15))
+            draw.text(char_position, char, font=font, fill=text_color)
+
+        # Add random lines or shapes
+        for _ in range(random.randint(5, 10)):
+            draw.line([(random.randint(0, 200), random.randint(0, 60)),
+                       (random.randint(0, 200), random.randint(0, 60))],
+                      fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)),
+                      width=random.randint(1, 2))
 
         # Save the image to a temporary file
         image.save('captcha.jpg')
@@ -288,14 +414,16 @@ class Client(QtWidgets.QWidget):
     def send_file(self, file_path):
         try:
             with open(file_path, "rb") as f:
-                file_content = f.read()
-                self.sock.sendall(file_content)
-                print(f"Fichier envoyé avec succès: {os.path.basename(file_path)}")
-                self.display_file(file_content, os.path.basename(file_path))
+                file_data = f.read()
+                file_name = os.path.basename(file_path)
+                self.sock.sendall(f'/sendfile {self.name} {file_name} {len(file_data)}'.encode('ascii'))
+                self.sock.sendall(file_data)
+                print(f"Fichier envoyé avec succès: {file_name}")
+                self.display_file(file_data, file_name, 'sent')
         except Exception as e:
-            print(f"Erreur lors de l'envoi du fichier {os.path.basename(file_path)} : {str(e)}")
+            print(f"Erreur lors de l'envoi du fichier {os.path.basename(file_path)}: {str(e)}")
 
-    def display_file(self, file_content, filename):
+    def display_file(self, file_content, filename, message_type):
         # Determine the MIME type of the file
         mime_type, _ = mimetypes.guess_type(filename)
 
@@ -320,18 +448,32 @@ class Client(QtWidgets.QWidget):
             file_label.setPixmap(pixmap.scaledToWidth(300))  # Adjust width as needed
         else:
             # Otherwise, display a generic file icon with the filename
-            file_label.setText(f"File sent: {filename}")
+            file_label.setText(f"File {message_type}: {filename}")
 
-        # Align file message to the right
+        # Align file message to the right or left
         file_widget = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(file_widget)
-        spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        layout.addItem(spacer)
-        layout.addWidget(file_label)
+        if message_type == 'sent':
+            spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+            layout.addItem(spacer)
+            layout.addWidget(file_label)
+        else:
+            layout.addWidget(file_label)
+            spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+            layout.addItem(spacer)
         self.messages_layout.addWidget(file_widget)
         self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
 
     def start(self):
+        matricule_dialog = MatriculeDialog()
+        if matricule_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            matricule = matricule_dialog.get_matricule()
+            if not check_matricule_exists(matricule):
+                QtWidgets.QMessageBox.warning(self, 'Erreur', 'Matricule invalide.')
+                sys.exit()
+        else:
+            sys.exit()
+
         login_dialog = LoginDialog()
         if login_dialog.exec_() == QtWidgets.QDialog.Accepted:
             self.name, self.password, captcha_input = login_dialog.get_credentials()
@@ -370,13 +512,14 @@ class Client(QtWidgets.QWidget):
         self.send_thread = SendThread(self.sock, self.name)
         self.receive_thread = ReceiveThread(self.sock, self.name)
         self.receive_thread.message_received.connect(self.display_message)
+        self.receive_thread.file_received.connect(
+            lambda file_content, filename, _: self.display_file(file_content, filename, 'received'))
 
         self.send_thread.start()
         self.receive_thread.start()
 
         self.sock.sendall(f'Server: {self.name} a rejoint le chat. Bienvenue!'.encode('ascii'))
         print("Tapez 'QUIT' pour quitter")
-
 
     def prompt_additional_info(self):
         email, ok = QtWidgets.QInputDialog.getText(self, 'Email', 'Adresse email:')
@@ -391,7 +534,12 @@ class Client(QtWidgets.QWidget):
         if not ok or not self.validate_dob(dob):
             return None, None, None
 
-        return email, gender, dob
+        terms_dialog = TermsDialog()
+        if terms_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            return email, gender, dob
+        else:
+            return None, None, None
+
 
     def check_user_exists(self, name):
         conn = sqlite3.connect('chat_clients.db')
@@ -496,6 +644,158 @@ class Client(QtWidgets.QWidget):
         self.messages_layout.addWidget(message_widget)
         self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
 
+class TermsDialog(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle('Conditions d\'utilisation')
+        self.resize(600, 400)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        self.terms_text = QtWidgets.QTextEdit(self)
+        self.terms_text.setReadOnly(True)
+        self.terms_text.setText(
+            "Conditions d'utilisation:\n\n"
+            "1. Respectez les autres utilisateurs.\n"
+            "2. Ne partagez pas d'informations personnelles.\n"
+            "3. Pas de spam ou de publicité.\n"
+            "4. Utilisez un langage approprié.\n"
+            "5. Suivez les directives de la communauté.\n\n"
+            "En cliquant sur 'Accepter', vous acceptez ces conditions."
+        )
+        self.layout.addWidget(self.terms_text)
+
+        self.checkbox = QtWidgets.QCheckBox('Je suis d\'accord avec les conditions d\'utilisation', self)
+        self.layout.addWidget(self.checkbox)
+
+        self.button_layout = QtWidgets.QHBoxLayout()
+
+        self.accept_button = QtWidgets.QPushButton('Accepter')
+        self.accept_button.clicked.connect(self.accept)
+        self.button_layout.addWidget(self.accept_button)
+
+        self.reject_button = QtWidgets.QPushButton('Refuser')
+        self.reject_button.clicked.connect(self.reject)
+        self.button_layout.addWidget(self.reject_button)
+
+        self.layout.addLayout(self.button_layout)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f6fff8;
+            }
+            QTextEdit {
+                background-color: white;
+                border: 1px solid #000;
+                border-radius: 15px;
+                padding: 10px;
+                font-size: 14pt;
+                color: black;
+            }
+            QCheckBox {
+                font-size: 14pt;
+                color: black;
+                margin: 10px;
+            }
+            QPushButton {
+                background-color: #2ec4b6;
+                width: 100px;
+                height: 40px;
+                font-size: 14pt;
+                border-radius: 10px;
+                color: white;
+            }
+        """)
+
+    def accept(self):
+        if self.checkbox.isChecked():
+            super().accept()
+        else:
+            QtWidgets.QMessageBox.warning(self, 'Attention', 'Vous devez accepter les conditions d\'utilisation pour continuer.')
+
+
+class NumClientsDialog(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle('Nombre de clients')
+        self.setModal(True)
+        self.resize(300, 150)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f6fff8;
+            }
+            QLabel {
+                font-size: 14pt;
+                color: black;
+            }
+            QSpinBox {
+                background-color: white;
+                padding: 10px;
+                font-size: 14pt;
+                border: 1px solid #000;
+                border-radius: 15px;
+                margin-bottom: 10px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 0px; /* Change the width to 0 to hide */
+            }
+            QLineEdit {
+                background-color: white;
+                padding: 10px;
+                font-size: 14pt;
+                border: 1px solid #000;
+                border-radius: 15px;
+                margin-bottom: 10px;
+            }
+            QPushButton {
+                background-color: #2ec4b6;
+                width: 100px;
+                height: 40px;
+                font-size: 14pt;
+                border-radius: 10px;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1d9186;
+            }
+            QPushButton:pressed {
+                background-color: #186f67;
+            }
+        """)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        self.num_label = QtWidgets.QLabel('Entrez le nombre de clients à ouvrir:')
+        self.layout.addWidget(self.num_label)
+
+        self.num_input = QtWidgets.QSpinBox(self)
+        self.num_input.setMinimum(1)  # Minimum number of clients
+        self.num_input.setMaximum(10)  # Maximum number of clients (adjust as needed)
+
+        # Remove the up and down buttons
+        self.num_input.setStyleSheet("QSpinBox::up-button, QSpinBox::down-button { width: 0px; }")
+
+        self.layout.addWidget(self.num_input)
+
+        self.button_layout = QtWidgets.QHBoxLayout()
+
+        self.ok_button = QtWidgets.QPushButton('OK')
+        self.ok_button.clicked.connect(self.accept)
+        self.button_layout.addWidget(self.ok_button)
+
+        self.cancel_button = QtWidgets.QPushButton('Annuler')
+        self.cancel_button.clicked.connect(self.reject)
+        self.button_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(self.button_layout)
+
+    def get_num_clients(self):
+        return self.num_input.value()
 
 def main():
     create_database()
@@ -507,11 +807,22 @@ def main():
     args = parser.parse_args()
 
     app = QtWidgets.QApplication(sys.argv)
-    client = Client(args.host, args.port)
-    client.show()
-    client.start()
-    sys.exit(app.exec_())
 
+    num_dialog = NumClientsDialog()
+    if num_dialog.exec_() == QtWidgets.QDialog.Accepted:
+        num_clients = num_dialog.get_num_clients()
+    else:
+        sys.exit()
+
+    clients = []
+
+    for _ in range(num_clients):
+        client = Client(args.host, args.port)
+        clients.append(client)
+        client.show()
+        client.start()
+
+    sys.exit(app.exec_())
 
 if __name__ == '__main__':
     main()
