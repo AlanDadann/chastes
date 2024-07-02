@@ -2,6 +2,12 @@ import threading
 import socket
 import argparse
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(filename='server.log', level=logging.INFO,
+                    format='%(asctime)s %(levelname)s %(message)s')
+
 
 class Server(threading.Thread):
     def __init__(self, host, port):
@@ -51,10 +57,13 @@ class ServerSocket(threading.Thread):
                 filename, file_size = parts[1], int(parts[2])
                 file_content = self.receive_file(file_size)
                 self.server.broadcast(f"/file {filename} {file_size}", self.sockname, is_file=True, filename=filename, file_content=file_content)
+                logging.info(f'File received from {self.sockname}: {filename}')
             elif header:
+                logging.info(f'Message received from {self.sockname}: {header}')
                 print(f"Message recu de {self.sockname}: {header}")
                 self.server.broadcast(header, self.sockname)
             else:
+                logging.info(f'Client {self.sockname} disconnected')
                 print(f"Client {self.sockname} deconnecte")
                 self.sc.close()
                 self.server.remove_connection(self)
@@ -76,8 +85,11 @@ class ServerSocket(threading.Thread):
         if is_file:
             self.sc.sendall(message.encode("utf-8"))
             self.sc.sendall(file_content)
+            logging.info(f'File sent: {filename}')
         else:
             self.sc.sendall(message.encode("utf-8"))
+            logging.info(f'Message sent: {message}')
+
 
 def exit(server):
     while True:
