@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import random
+import secrets
 import os
 import mimetypes  # Ajout de l'importation de mimetypes
 
@@ -278,32 +279,34 @@ class LoginDialog(QtWidgets.QDialog):
         return self.name_input.text(), self.password_input.text(), self.captcha_input.text()
 
     def generate_captcha(self):
-        captcha_text = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=5))  # Increase length to 8
+        captcha_text = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in
+                               range(8))  # Increase length to 8
         self.captcha_text = captcha_text
 
         # Create an image with white background
         image = Image.new('RGB', (200, 60), (255, 255, 255))
         draw = ImageDraw.Draw(image)
 
+        # Replace `random.randint` with `secrets.randbelow`
         try:
-            font = ImageFont.truetype('arial.ttf', random.randint(28, 32))  # Randomize font size
+            font = ImageFont.truetype('arial.ttf', 28 + secrets.randbelow(5))  # Randomize font size
         except IOError:
             font = ImageFont.load_default()
 
-        # Randomize RGB color for text
-        text_color = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
+        # Randomize RGB color for text using `secrets`
+        text_color = (secrets.randbelow(201), secrets.randbelow(201), secrets.randbelow(201))
 
         # Draw text with slight random distortions
         for char_index, char in enumerate(captcha_text):
-            char_position = (10 + char_index * 20 + random.randint(-5, 5), random.randint(5, 15))
+            char_position = (10 + char_index * 20 + secrets.randbelow(11) - 5, 5 + secrets.randbelow(11))
             draw.text(char_position, char, font=font, fill=text_color)
 
         # Add random lines or shapes
-        for _ in range(random.randint(5, 10)):
-            draw.line([(random.randint(0, 200), random.randint(0, 60)),
-                       (random.randint(0, 200), random.randint(0, 60))],
-                      fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)),
-                      width=random.randint(1, 2))
+        for _ in range(5 + secrets.randbelow(6)):
+            draw.line([(secrets.randbelow(201), secrets.randbelow(61)),
+                       (secrets.randbelow(201), secrets.randbelow(61))],
+                      fill=(secrets.randbelow(256), secrets.randbelow(256), secrets.randbelow(256)),
+                      width=1 + secrets.randbelow(2))
 
         # Save the image to a temporary file
         image.save('captcha.jpg')
