@@ -1,6 +1,9 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import threading
+import socket
+import argparse
 
 # Function to set file permissions securely
 def set_secure_file_permissions(file_path):
@@ -25,14 +28,13 @@ set_secure_file_permissions(log_file)
 # Example logging
 logger.info("Logging is set up.")
 
-# Existing imports and code...
-import threading
-import socket
-import argparse
-import os
-
 class Server(threading.Thread):
-    # Your existing Server class code...
+    def __init__(self, host, port):
+        super().__init__()
+        self.connections = []
+        self.host = host
+        self.port = port
+
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -63,7 +65,12 @@ class Server(threading.Thread):
         logger.info(f"Connection removed: {connection.sockname}")
 
 class ServerSocket(threading.Thread):
-    # Your existing ServerSocket class code...
+    def __init__(self, sc, sockname, server):
+        super().__init__()
+        self.sc = sc
+        self.sockname = sockname
+        self.server = server
+
     def run(self):
         while True:
             header = self.sc.recv(1024).decode("utf-8")
